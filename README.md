@@ -20,7 +20,7 @@ The recorder follows supported local bindings and some string transformations. I
 
 ## Debugger MCP
 
-The companion extension is packaged as `dist/pycharm-debugger-mcp-0.1.5.zip` in the `pycharm-debugger-mcp` repository. Install it through **Install Plugin from Disk** and enable PyCharm’s bundled MCP Server.
+Download [Debugger MCP Extension 0.1.6](https://raw.githubusercontent.com/ivorpad/pycharm-debugger-mcp/598a922c311d4d1d868be169e71f174698edf644/dist/pycharm-debugger-mcp-0.1.6.zip), choose **Install Plugin from Disk** and enable PyCharm’s bundled MCP Server. The extension can launch a local Python file or a saved Debug configuration and create or update a Python Debug Server for a container. See the [launch examples](https://github.com/ivorpad/pycharm-debugger-mcp/blob/598a922c311d4d1d868be169e71f174698edf644/README.md#start-a-container-session-with-pydevd).
 
 With the updated Debugger MCP Extension installed, `debugger_origin` exposes recorded data in a paused local Python frame. Use `action=watch_once` and `name=payload`, then resume with `debugger_control`. The monitor disarms at the first change. After the debugger pauses, `action=watch_status` reports whether it is armed and its last hit; `action=unwatch` cancels it. A different breakpoint may pause execution first, so check the status. The monitor belongs to one function invocation and ends when that frame exits. Arming another monitor in the same frame replaces the previous one.
 
