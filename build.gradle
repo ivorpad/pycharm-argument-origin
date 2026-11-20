@@ -29,7 +29,7 @@ def pluginJar = tasks.register('pluginJar', Jar) {
 }
 tasks.register('buildPlugin', Zip) {
     dependsOn pluginJar
-    archiveFileName = 'argument-origin-0.4.3.zip'
+    archiveFileName = 'argument-origin-0.4.4.zip'
     destinationDirectory = layout.buildDirectory.dir('distributions')
     into('argument-origin/lib') { from pluginJar }
     into('argument-origin/python') { from 'python'; include '*.py' }

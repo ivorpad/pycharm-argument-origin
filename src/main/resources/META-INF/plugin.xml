@@ -1,10 +1,9 @@
 <idea-plugin>
   <id>local.argument.origin</id>
   <name>Argument Origin</name>
-  <version>0.4.3</version>
+  <version>0.4.4</version>
   <vendor>Argument Origin contributors</vendor>
   <description>Inspect recorded Python bindings and suspend on a local rebinding.</description>
-  <idea-version since-build="263.7307" until-build="263.*"/>
   <depends>com.intellij.modules.platform</depends>
   <depends>com.intellij.modules.python</depends>
   <extensions defaultExtensionNs="com.intellij">
