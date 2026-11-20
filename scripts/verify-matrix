@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+helper="$PWD/build/verification/argument-origin/python"
+if [ ! -f "$helper/record.py" ]; then
+    echo 'Run ./gradlew build first to unpack the distribution for testing.' >&2
+    exit 1
+fi
+export ARG_ORIGIN_TEST_HELPER="$helper"
+if [ "$#" -eq 0 ]; then set -- python3.12 python3.13 python3.14 python3.15; fi
+for interpreter do
+    "$interpreter" -V
+    "$interpreter" -m unittest discover -s tests -v
+    "$interpreter" tests/debugger_smoke.py --contents "${PYCHARM_CONTENTS:-$PWD/.local/PyCharm.app/Contents}" --launcher "$helper/record.py"
+done

@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+root=$(pwd -P)
+contents=${PYCHARM_CONTENTS:-"$root/.local/PyCharm.app/Contents"}
+profile="$root/.local/profile"
+mkdir -p "$profile"/config "$profile"/system "$profile"/plugins "$profile"/logs
+cat > "$root/.local/ide.properties" <<PROPERTIES
+idea.config.path=$profile/config
+idea.system.path=$profile/system
+idea.plugins.path=$profile/plugins
+idea.log.path=$profile/logs
+idea.initially.ask.config=false
+ide.show.tips.on.startup.default.value=false
+PROPERTIES
+export PYCHARM_PROPERTIES="$root/.local/ide.properties"
+exec "$contents/MacOS/pycharm" "$root/example"

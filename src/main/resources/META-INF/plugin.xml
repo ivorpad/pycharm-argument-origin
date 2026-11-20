@@ -1,0 +1,36 @@
+<idea-plugin>
+  <id>local.argument.origin</id>
+  <name>Argument Origin</name>
+  <version>0.4.1</version>
+  <vendor>Argument Origin contributors</vendor>
+  <description>Inspect recorded Python bindings and suspend on a local rebinding.</description>
+  <idea-version since-build="263.7307" until-build="263.*"/>
+  <depends>com.intellij.modules.platform</depends>
+  <depends>com.intellij.modules.python</depends>
+  <extensions defaultExtensionNs="com.intellij">
+    <toolWindow id="Argument Origin" anchor="right" icon="/icons/argumentOrigin.svg" factoryClass="origin.OriginWindow"/>
+  </extensions>
+  <extensions defaultExtensionNs="Pythonid">
+    <pythonDebugBackendRunner implementation="origin.RecordingBackend" order="first"/>
+  </extensions>
+  <actions>
+    <action id="ArgumentOrigin.Trace" class="origin.Trace" text="Trace Argument Origin">
+      <add-to-group group-id="XDebugger.Variables.Tree.Popup" anchor="last"/>
+      <add-to-group group-id="XDebugger.Watches.Tree.Popup" anchor="last"/>
+    </action>
+    <action id="ArgumentOrigin.Watch" class="origin.Watch" text="Pause on Value Changes">
+      <add-to-group group-id="XDebugger.Variables.Tree.Popup" anchor="last"/>
+    </action>
+    <action id="ArgumentOrigin.WatchWhenChanged" class="origin.WatchWhenChanged" text="Pause on Value Changes">
+      <add-to-group group-id="XDebugger.Watches.Tree.Popup" anchor="after" relative-to-action="XDebugger.NewWatch"/>
+    </action>
+    <action id="ArgumentOrigin.Unwatch" class="origin.Unwatch" text="Stop Pausing on Value Changes">
+      <add-to-group group-id="XDebugger.Variables.Tree.Popup" anchor="last"/>
+      <add-to-group group-id="XDebugger.Watches.Tree.Popup" anchor="last"/>
+    </action>
+    <action id="ArgumentOrigin.History" class="origin.History" text="Show Value History">
+      <add-to-group group-id="XDebugger.Variables.Tree.Popup" anchor="last"/>
+      <add-to-group group-id="XDebugger.Watches.Tree.Popup" anchor="last"/>
+    </action>
+  </actions>
+</idea-plugin>

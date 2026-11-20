@@ -1,0 +1,8 @@
+.local/
+.gradle/
+build/
+__pycache__/
+*.pyc
+.DS_Store
+example/.idea/workspace.xml
+example/.idea/shelf/

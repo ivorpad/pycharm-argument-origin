@@ -1,0 +1,54 @@
+// Compile against the same SDK that loads the plugin. Gradle supplies the Kotlin
+// compiler, and PyCharm supplies Kotlin at runtime.
+plugins { id 'base' }
+
+def contents = file(providers.gradleProperty('pycharmContents').getOrElse('.local/PyCharm.app/Contents'))
+def sdk = files(fileTree(new File(contents, 'lib')) { include '*.jar' },
+                fileTree(new File(contents, 'plugins/python-ce/lib')) {
+                    include '*.jar', 'modules/*.jar'
+                })
+def gradleLib = new File(gradle.gradleHomeDir, 'lib')
+def classes = layout.buildDirectory.dir('classes/kotlin')
+tasks.register('compileKotlin', JavaExec) {
+    inputs.files(fileTree('src/main/kotlin'), sdk)
+    outputs.dir(classes)
+    classpath = fileTree(gradleLib) { include '*.jar' }
+    mainClass = 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler'
+    doFirst {
+        if (!contents.isDirectory()) throw new GradleException('Set -PpycharmContents to the PyCharm Contents directory')
+        classes.get().asFile.mkdirs()
+        args '-no-stdlib', '-no-reflect', '-jvm-target', '25', '-classpath', sdk.asPath, '-d', classes.get().asFile
+        args fileTree('src/main/kotlin').matching { include '**/*.kt' }.files
+    }
+}
+def pluginJar = tasks.register('pluginJar', Jar) {
+    dependsOn 'compileKotlin'
+    archiveFileName = 'argument-origin.jar'
+    from classes
+    from 'src/main/resources'
+}
+tasks.register('buildPlugin', Zip) {
+    dependsOn pluginJar
+    archiveFileName = 'argument-origin-0.4.1.zip'
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    into('argument-origin/lib') { from pluginJar }
+    into('argument-origin/python') { from 'python'; include '*.py' }
+}
+assemble.dependsOn 'buildPlugin'
+
+def python = providers.gradleProperty('python').getOrElse('python3.12')
+tasks.register('recordingTest', Exec) {
+    commandLine python, '-m', 'unittest', 'discover', '-s', 'tests', '-v'
+}
+def installed = layout.buildDirectory.dir('verification')
+tasks.register('unpackForTest', Sync) {
+    dependsOn 'buildPlugin'
+    from { zipTree(tasks.buildPlugin.archiveFile.get()) }
+    into installed
+}
+tasks.register('debuggerSmoke', Exec) {
+    dependsOn 'unpackForTest'
+    commandLine python, 'tests/debugger_smoke.py', '--contents', contents,
+        '--launcher', installed.get().file('argument-origin/python/record.py')
+}
+check.dependsOn 'recordingTest', 'debuggerSmoke'
