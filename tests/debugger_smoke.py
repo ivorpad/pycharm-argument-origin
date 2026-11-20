@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def smoke(contents, launcher, loop=False):
+def smoke(contents, launcher, loop=False, once=False):
     pydevd = contents / "plugins/python-ce/helpers/pydev/pydevd.py"
     sample = ROOT / "example" / ("watch_loop.py" if loop else "pipeline.py")
     with tempfile.TemporaryDirectory(dir=ROOT / ".local") as tmp, socket.socket() as listener:
@@ -69,6 +69,31 @@ def smoke(contents, launcher, loop=False):
                     send(111, 1, "python-line", sample, 2, "None", "", "", "", "False", "NONE")
                     send(101, "")
                     ids = paused(2)
+                    if once:
+                        def mcp(mode, offset=0, limit=20, detail=False, event_id=None, changes_only=False):
+                            thread, frame = ids
+                            expr = (f"__import__('argument_origin').export_mcp({frame}, 'payload', {mode!r}, "
+                                    f"{str(exchange)!r}, {offset}, {limit}, {detail}, {event_id}, {changes_only})")
+                            seq = send(113, thread, frame, "LOCAL", expr, 0)
+                            assert "True" in receive(113, seq)
+                            return json.loads(exchange.read_text())
+                        assert mcp("watch_once")["armed"]
+                        send(106, ids[0])
+                        assert paused(6) == ids
+                        status = mcp("watch_status")
+                        assert not status["armed"] and status["last_hit"]["value"] == "10", status
+                        total = mcp("history", 0, 1)["total"]
+                        page = mcp("history", total - 1, 1, True)
+                        assert page["rows"][0]["value"] == "10" and "detail" in page["rows"][0], page
+                        changed = mcp("history", changes_only=True)
+                        assert len(changed["rows"]) == 1 and changed["rows"][0]["value"] == "10", changed
+                        trace = mcp("trace", event_id=changed["rows"][0]["eventId"], detail=True)
+                        assert trace["rows"][-1]["value"] == "10" and trace["rows"][-1]["location"]["line"] == 5, trace
+                        send(106, ids[0])
+                        out, err = child.communicate(timeout=15)
+                        assert child.returncode == 0 and b"finished 9899" in out, (out, err)
+                        print("One-shot monitor paused once, disarmed, and expanded change history")
+                        return
                     if loop:
                         assert "Armed" in query(ids, "watch")["note"]
                         for before, after in [(-1, 10), (10, 7000), (7000, 9800)]:
@@ -116,3 +141,4 @@ if __name__ == "__main__":
     (ROOT / ".local").mkdir(exist_ok=True)
     smoke(args.contents.resolve(), args.launcher.resolve())
     smoke(args.contents.resolve(), args.launcher.resolve(), loop=True)
+    smoke(args.contents.resolve(), args.launcher.resolve(), loop=True, once=True)

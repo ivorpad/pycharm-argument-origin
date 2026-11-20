@@ -140,6 +140,70 @@ class RecorderTests(unittest.TestCase):
         self.assertEqual(hits, [("'same'", "'new'", "new"), ("'new'", "'last'", "last")])
         self.assertEqual(rows[-1]["location"], rows[-2]["location"])
 
+    def test_one_shot_monitor_and_paged_provenance(self):
+        report = tempfile.NamedTemporaryFile()
+        self.addCleanup(report.close)
+        scope = program("""
+            def change(value):
+                frame = id(sys._getframe())
+                armed = origin._recording.query(frame, "value", "watch_once")
+                value = "first"
+                value = "second"
+                status = origin._recording.query(frame, "value", "watch_status")
+                origin.export_mcp(frame, "value", "history", report_path, 1, 1, False)
+                with open(report_path) as f:
+                    page = json.load(f)
+                origin.export_mcp(frame, "value", "history", report_path, 1, 1, True)
+                with open(report_path) as f:
+                    details = json.load(f)
+                return armed, status, page, details
+        """, report_path=report.name, json=json)
+        hits = []
+        self.record(on_break=lambda f, e: hits.append(e["new"]))
+        armed, status, page, details = scope["change"]("initial")
+        self.assertTrue(armed["armed"])
+        self.assertEqual(hits, ["'first'"])
+        self.assertFalse(status["armed"])
+        self.assertEqual(status["last_hit"]["value"], "'first'")
+        self.assertEqual((page["total"], page["offset"], page["nextOffset"]), (3, 1, 2))
+        self.assertEqual(page["rows"][0]["value"], "'first'")
+        self.assertNotIn("detail", page["rows"][0])
+        self.assertIn("detail", details["rows"][0])
+
+    def test_history_changes_expand_the_selected_old_producer(self):
+        report = tempfile.NamedTemporaryFile()
+        self.addCleanup(report.close)
+        scope = program("""
+            def make(value):
+                result = value.upper()
+                return result
+            def change(value):
+                frame = id(sys._getframe())
+                value = make(value)
+                value = "".join(("A",))
+                value = "new"
+                origin.export_mcp(frame, "value", "history", report_path, 0, 20, False, None, True)
+                with open(report_path) as f:
+                    changes = json.load(f)
+                first = changes["rows"][0]["eventId"]
+                origin.export_mcp(frame, "value", "trace", report_path, 0, 20, True, first)
+                with open(report_path) as f:
+                    trace = json.load(f)
+                origin.export_mcp(frame, "value", "trace", report_path, 0, 20, False, 999999)
+                with open(report_path) as f:
+                    expired = json.load(f)
+                return changes, trace, expired
+        """, report_path=report.name, json=json)
+        self.record()
+        changes, trace, expired = scope["change"]("a")
+        self.assertEqual([row["value"] for row in changes["rows"]], ["'A'", "'new'"])
+        self.assertEqual(changes["rows"][0]["description"], "return from make → value")
+        self.assertTrue(all(row["changed"] for row in changes["rows"]))
+        self.assertTrue(any(row["function"] == "make" and row["action"] == "Returned value" for row in trace["rows"]))
+        self.assertEqual(trace["rows"][-1]["eventId"], changes["rows"][0]["eventId"])
+        self.assertEqual(trace["rows"][-1]["value"], "'A'")
+        self.assertIn("unavailable or expired", expired["note"])
+
     def test_display_distinguishes_none_deletion_and_new_binding(self):
         scope = program("""
             def edit(payload):

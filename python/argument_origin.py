@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 MISSING = object()
-UNWATCHED = object()
 PRIVATE = re.compile(r"passw|secret|token|credential|api_?key|authorization", re.I)
 STRING_METHODS = {"strip", "lstrip", "rstrip", "lower", "upper", "casefold", "capitalize"}
 HELPER_FILES = {__file__, os.path.join(os.path.dirname(__file__), "record.py")}
@@ -71,11 +70,14 @@ class Activation:
     returned: tuple | None = None
     watch: str | None = None
     watch_file: str | None = None
+    watch_once: bool = False
+    last_hit: dict | None = None
 
     def clear_watch(self):
         if self.watch_file:
             _watch_report(self.watch_file, {"closed": True})
         self.watch = self.watch_file = None
+        self.watch_once = False
 
 
 FAST_LOADS = {"LOAD_FAST", "LOAD_FAST_BORROW", "LOAD_FAST_CHECK"}
@@ -306,7 +308,7 @@ class Recording:
                 bindings[name] = ("observed", state.latest[arg], f"{arg} → {name}", arg in state.sensitive)
         state.call = (callee, offset, call_end, bindings)
 
-    def add(self, frame, state, name, edge, desc, parent, old, value, line, private, path=(), kind="assignment"):
+    def add(self, frame, state, name, edge, desc, parent, old, value, line, private, path=(), kind="assignment", changed=None):
         private = bool(self.hide_values or private or PRIVATE.search(name))
         if private:
             state.sensitive.add(name)
@@ -315,7 +317,7 @@ class Recording:
         task = asyncio.current_task() if _running_loop() else None
         event_id = next(self.ids)
         item = dict(id=event_id, parent=parent, frame=state.serial, function=frame.f_code.co_qualname,
-                    name=name, kind=kind, edge=edge, description=desc, old=old, new=preview(name, value, private),
+                    name=name, kind=kind, edge=edge, description=desc, old=old, new=preview(name, value, private), changed=changed,
                     location=location(frame.f_code, line), call=state.callsite, caller=state.caller,
                     thread=threading.get_ident(), task=id(task) if task is not None else None, ns=time.time_ns(), path=path)
         self.events[event_id] = item
@@ -342,7 +344,7 @@ class Recording:
             edge, parent, desc, private = self.resolve(state, loc, offset, name, edge, src, method)
             state.pending.append(Store(name, line, edge, desc, parent,
                                   preview(name, before, self.hide_values or name in state.sensitive),
-                                  before if state.watch == name else UNWATCHED, private,
+                                  before, private,
                                   successor, tuple(state.lines)))
 
     @staticmethod
@@ -395,15 +397,21 @@ class Recording:
         for store in pending:
             value = frame.f_locals.get(store.name, MISSING)
             event = self.add(frame, state, store.name, store.edge, store.description, store.parent,
-                             store.old, value, store.line, store.private, store.path)
-            if state.watch == store.name and store.before is not UNWATCHED and _changed(store.before, value):
+                             store.old, value, store.line, store.private, store.path,
+                             changed=_changed(store.before, value))
+            if state.watch == store.name and event["changed"]:
                 hit = event
         if hit is None:
             return
+        state.last_hit = _row(hit)
+        once = state.watch_once
         if state.watch_file:
             note = f"Changed at line {hit['location']['line']}. Resume to stop at the next change."
             _watch_report(state.watch_file, dict(hit=hit["id"], title=f"Value changed · {hit['name']}",
                                                  note=note, rows=[_row(hit)]))
+        if once:
+            state.watch = state.watch_file = None
+            state.watch_once = False
         if not already_paused:
             self.on_break(frame, hit)
 
@@ -413,7 +421,7 @@ class Recording:
             if state and state.watch and self.pid == os.getpid():
                 state.clear_watch()
 
-    def query(self, frame_id, name, mode, watch_file=None):
+    def query(self, frame_id, name, mode, watch_file=None, event_id=None, changes_only=False):
         state = self.frames.get(frame_id)
         mismatch = False
         if state and self.pid == os.getpid():
@@ -423,14 +431,19 @@ class Recording:
                 if state.pending and frame.f_lasti == state.pending[0].successor:
                     self.finish_store(frame, state, frame.f_lasti, already_paused=True)
                 mismatch = name in state.object_ids and id(frame.f_locals.get(name, MISSING)) != state.object_ids[name]
-        title = {"watch": "Value-change breakpoint", "unwatch": "Value-change breakpoint",
+        title = {"watch": "Value-change breakpoint", "watch_once": "Value-change breakpoint",
+                 "watch_status": "Value-change breakpoint", "unwatch": "Value-change breakpoint",
                  "trace": "Argument origin", "history": "Value history"}[mode]
         report = {"title": f"{title} · {name}", "rows": [], "note": ""}
         if not state or name not in state.latest or self.pid != os.getpid():
             report["note"] = "Unknown. This binding was outside the recording. Rerun with record.py before entering the caller."
             return report
-        if mismatch and mode == "trace":
+        if mismatch and mode == "trace" and event_id is None:
             report["note"] = "Unknown. The current binding differs from the last recorded store."
+            return report
+        if mode == "watch_status":
+            report.update(armed=state.watch == name, once=state.watch == name and state.watch_once,
+                          last_hit=state.last_hit if state.last_hit and state.last_hit["name"] == name else None)
             return report
         if mode == "unwatch":
             if state.watch == name:
@@ -439,7 +452,7 @@ class Recording:
             else:
                 report["note"] = f"No value-change breakpoint on {name} in this frame."
             return report
-        if mode == "watch":
+        if mode in ("watch", "watch_once"):
             if self.on_break == _suspend and _debugger() is None:
                 report["note"] = "Watch unavailable. Use the local PyCharm pydevd debugger."
             else:
@@ -447,10 +460,15 @@ class Recording:
                     state.clear_watch()
                 state.watch = name
                 state.watch_file = watch_file
-                report["note"] = f"Armed for frame #{state.serial}. Resume to stop each time {name} changes."
+                state.watch_once = mode == "watch_once"
+                state.last_hit = None
+                report.update(armed=True, once=state.watch_once)
+                report["note"] = f"Armed for frame #{state.serial}. Resume to stop when {name} changes."
             return report
         if mode == "history":
             rows = [e for e in self.events.copy().values() if e["frame"] == state.serial and e["name"] == name]
+            if changes_only:
+                rows = [e for e in rows if e["changed"] is True]
             report["note"] = f"Frame #{state.serial} · {len(rows)} retained bindings, in execution order."
             if mismatch:
                 report["note"] += " The current binding changed outside the recording."
@@ -458,7 +476,12 @@ class Recording:
                 report["note"] += " Older events may have expired."
         else:
             rows = []
-            index = state.latest[name]
+            index = state.latest[name] if event_id is None else event_id
+            if event_id is not None:
+                selected = self.events.get(event_id)
+                if selected is None or selected["frame"] != state.serial or selected["name"] != name:
+                    report["note"] = "History event unavailable or expired for this binding and frame."
+                    return report
             while index is not None and (event := self.events.get(index)) is not None:
                 rows.append(event)
                 index = event["parent"]
@@ -504,7 +527,7 @@ def _row(e):
     previous = None if old == "<unbound>" else old
     current = None if new == "<unbound>" else new
     values = f"{previous} → {current}" if previous is not None and current is not None else (current or previous or "")
-    return dict(name=e["name"], function=e["function"], action=action, value=current, previous=previous,
+    return dict(eventId=e["id"], changed=e["changed"], name=e["name"], function=e["function"], action=action, value=current, previous=previous,
                 forwarded=e["kind"] == "argument" and e["edge"] == "observed" and e["parent"] is not None,
                 edge=e["edge"], description=e["description"], frame=e["frame"], caller=e["caller"],
                 time=timestamp, thread=str(e["thread"]), task=e["task"], lines=lines,
@@ -561,6 +584,31 @@ def stop():
 def export(frame_id, name, mode, path, watch_file=None):
     report = (_recording.query(frame_id, name, mode, watch_file) if _recording else
               dict(title=name, note="Unknown. Rerun with python/record.py to record before entry.", rows=[]))
+    _write(path, report)
+    return True
+
+
+def export_mcp(frame_id, name, mode, path, offset=0, limit=20, detail=False, event_id=None, changes_only=False):
+    if mode not in ("trace", "history", "watch_once", "unwatch", "watch_status"):
+        raise ValueError("Unsupported Argument Origin operation")
+    if not isinstance(offset, int) or offset < 0 or not isinstance(limit, int) or not 1 <= limit <= 50:
+        raise ValueError("offset must be nonnegative and limit must be between 1 and 50")
+    if event_id is not None and (mode != "trace" or type(event_id) is not int or event_id < 1):
+        raise ValueError("event_id is only valid for trace and must be positive")
+    if type(changes_only) is not bool or (changes_only and mode != "history"):
+        raise ValueError("changes_only is only valid for history")
+    report = (_recording.query(frame_id, name, mode, event_id=event_id, changes_only=changes_only) if _recording else
+              dict(title=name, note="Unknown. Rerun with Argument Origin recording enabled.", rows=[]))
+    if mode in ("trace", "history"):
+        rows = report["rows"]
+        report["total"] = len(rows)
+        report["offset"] = offset
+        report["nextOffset"] = offset + limit if offset + limit < len(rows) else None
+        report["rows"] = rows[offset:offset + limit]
+        if not detail:
+            fields = ("eventId", "changed", "name", "function", "action", "value", "previous", "edge",
+                      "description", "caller", "call", "location")
+            report["rows"] = [{key: row[key] for key in fields} for row in report["rows"]]
     _write(path, report)
     return True
 
